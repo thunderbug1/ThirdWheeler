@@ -1,0 +1,28 @@
+# Dockerfile
+
+# Use Python 3.12 as the base image
+FROM python:3.12-slim AS core
+
+WORKDIR /app
+
+# Install necessary system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the application code
+COPY . .
+
+# Command to run the application
+CMD ["python", "bot.py"]
+
+# Dev container configuration
+FROM core AS dev
+
+# Expose the port for the locally hosted LLM (if required)
+EXPOSE 5000

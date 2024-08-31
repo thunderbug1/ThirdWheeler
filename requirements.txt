@@ -1,0 +1,9 @@
+psycopg2
+sqlalchemy
+alembic
+python-dotenv
+openai
+requests
+structlog
+python-telegram-bot==20.3
+apscheduler
