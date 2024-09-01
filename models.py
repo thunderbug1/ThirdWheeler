@@ -1,5 +1,3 @@
-# models.py
-
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
@@ -12,7 +10,6 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     telegram_id = Column(Integer, unique=True, nullable=False)
     name = Column(String, nullable=False)
-    invite_token = Column(String, nullable=True)
     summary = Column(Text, nullable=True)
 
     conversations = relationship('Conversation', back_populates='user')
@@ -66,7 +63,7 @@ class PendingCouple(Base):
 
     id = Column(Integer, primary_key=True)
     requester_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    requested_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    requested_id = Column(Integer, ForeignKey('users.id'), nullable=True)  # Make nullable
     token = Column(String, unique=True, nullable=False)
 
     requester = relationship('User', foreign_keys=[requester_id])
