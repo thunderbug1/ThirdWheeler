@@ -6,13 +6,13 @@ from telegram import Bot
 from models import ScheduledAction, Conversation
 from db_utils import get_session, get_current_user
 from utils import send_message_to_user
-from llm import LLMWrapper
+from llm import setup_llm, LLMWrapper
 
 logger = structlog.get_logger()
 
 def start_scheduler(bot_token: str):
     bot = Bot(token=bot_token)
-    llm = LLMWrapper(api_url="http://host.docker.internal:11434/v1")
+    llm = setup_llm()
     logger.info("Scheduler started")
 
     while True:

@@ -3,15 +3,14 @@ from sqlalchemy.orm import Session
 from telegram.ext import ContextTypes
 from models import ScheduledAction, User, UserActionLog
 from datetime import datetime, timezone
-from llm import LLMWrapper
 
 logger = structlog.get_logger()
 
-def get_translated_message(llm: LLMWrapper, text: str, target_language: str) -> str:
+def get_translated_message(llm, text: str, target_language: str) -> str:
     """Translate a system message to the user's language."""
     return llm.translate(text, target_language)
 
-async def send_message_to_user(bot, chat_id: int, message: str, llm: LLMWrapper, user_language: str):
+async def send_message_to_user(bot, chat_id: int, message: str, llm, user_language: str):
     """Send a translated message to a user."""
     translated_message = get_translated_message(llm, message, user_language)
     await bot.send_message(chat_id=chat_id, text=translated_message)
@@ -23,7 +22,7 @@ def update_user_language(session: Session, user: User, telegram_language: str) -
         session.commit()
         logger.info(f"Updated language for user {user.telegram_id} to {telegram_language}")
 
-async def rate_limited(update: ContextTypes.DEFAULT_TYPE, context: ContextTypes.DEFAULT_TYPE, session: Session, llm: LLMWrapper) -> bool:
+async def rate_limited(update: ContextTypes.DEFAULT_TYPE, context: ContextTypes.DEFAULT_TYPE, session: Session, llm) -> bool:
     """Check if the user is rate-limited and handle the response if they are."""
     user_telegram_id = update.effective_user.id
     user_language = update.message.from_user.language_code or 'en'

@@ -1,14 +1,13 @@
-from datetime import datetime, timezone
 import structlog
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler
-from db_utils import add_scheduled_action, delete_scheduled_action, get_scheduled_actions_for_user, get_session, get_current_user, check_user_linked
-from utils import format_scheduled_actions, get_translated_message, send_message_to_user, rate_limited, update_user_language
+from db_utils import  get_session, get_current_user, check_user_linked
+from utils import get_translated_message, send_message_to_user, rate_limited, update_user_language
 from models import User, Couple, PendingCouple, Conversation, ScheduledAction
 import os
 from scheduler import start_scheduler
 from database import init_db
-from llm import LLMWrapper
+from llm import LLMWrapper, get_llm_functions, get_user_summary, prepare_context_messages, process_llm_response, save_conversation, setup_llm
 import secrets
 from sqlalchemy.exc import SQLAlchemyError
 import dotenv
@@ -24,7 +23,7 @@ structlog.configure(
 logger = structlog.get_logger()
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-llm = LLMWrapper(api_url="http://host.docker.internal:11434/v1")
+llm = setup_llm()
 
 CONFIRM_UNLINK, CONFIRM_DELETE = range(2)
 
@@ -294,114 +293,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Update the user's language if it has changed
         update_user_language(session, user, user_language)
 
-        user_summary = user.summary if user.summary else ""
-        user_history = session.query(Conversation).filter(Conversation.user_id == user.id).count()
-
-        # Retrieve and format the list of scheduled actions
-        scheduled_actions = get_scheduled_actions_for_user(session, user.id)
-        formatted_actions = format_scheduled_actions(scheduled_actions)
-
-        context_messages = []
-        if user_history == 0 and not user_summary:
-            hidden_intro_message = (
-                "This is the user's first interaction. "
-                "Introduce yourself as the ThirdWheeler bot, a helpful assistant designed to help couples communicate better. "
-                "Explain that you can remind them of things their partner would like to see more or less often, "
-                "and help them improve their relationship through better communication. "
-                "Explain that they can add their partner by using the /add_partner command followed by their partner's username or via an invite link. "
-                "Once they are linked with their partner, you will keep track of their conversations and provide helpful reminders. "
-                "To get started, ask the user for some basic information such as their name, birthday, and anything else they would like you to know. "
-                "Once this information is gathered, store it in the user's summary so that you don't need to ask again."
-            )
-            context_messages.append({"role": "system", "content": hidden_intro_message})
-
-        # Add the current time as a system message
-        current_time = datetime.now(timezone.utc).isoformat()
-        system_time_message = f"The current system time is {current_time} UTC."
-        context_messages.append({"role": "system", "content": system_time_message})
-
-        # Include the list of scheduled actions in the context
-        context_messages.append({"role": "system", "content": formatted_actions})
-
-        # Add the user's message to the context
-        context_messages.append({"role": "user", "content": message})
+        user_summary = get_user_summary(user)
+        context_messages = prepare_context_messages(session, user, user_summary, message)
 
         logger.info("Handling user message", telegram_id=user_telegram_id, message=message)
 
-        # Start typing action
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
-        # try:
-        response = await llm.get_response(context_messages, summary=user_summary, user_language=user_language, functions=[
-            {
-                "name": "overwrite_summary",
-                "description": "Overwrite the user's summary with new information.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "integer", "description": "The ID of the user."},
-                        "new_summary": {"type": "string", "description": "The new summary of the user."},
-                    },
-                    "required": ["user_id", "new_summary"],
-                },
-            },
-            {
-            "name": "add_scheduled_action",
-            "description": "Add a new scheduled action for when you want to become active to send a message to the user.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "user_id": {"type": "integer", "description": "The ID of the user."},
-                    "description": {"type": "string", "description": "The description of the action. Also mention the frequency if it is a recurring action."},
-                    "trigger_time": {"type": "string", "description": "The time to trigger the action, in ISO 8601 format."}
-                },
-                "required": ["user_id", "description", "trigger_time"]
-            }
-        },
-        {
-            "name": "delete_scheduled_action",
-            "description": "Delete an existing scheduled action.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action_id": {"type": "integer", "description": "The ID of the action to delete."}
-                },
-                "required": ["action_id"]
-            }
-        }
-        ])
-        # except Exception as ex:
-        #     logger.error(f"{ex}")
-        # # finally:
-            # Stop typing action
-            # await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=None)
-
-        conversation = Conversation(
-            couple_id=None,  # This is a user-specific interaction, not a couple interaction
-            user_id=user.id,
-            message=message
+        response = await llm.get_response(
+            context_messages, 
+            summary=user_summary, 
+            user_language=user_language, 
+            functions=get_llm_functions()
         )
-        session.add(conversation)
 
-        rsponse_content = response['content']
-
-        await update.message.reply_text(rsponse_content)
-
-        if response.get('function_call'):
-            function_name = response['function_call']['name']
-            arguments = response['function_call']['arguments']
-            
-            if function_name == "add_scheduled_action":
-                trigger_time = datetime.fromisoformat(arguments['trigger_time'])
-                action_id = add_scheduled_action(session, user.id, arguments['description'], trigger_time)
-                # await update.message.reply_text(f"Scheduled action {action_id} added!")
-                await send_message_to_user(context.bot, user_telegram_id, f"Scheduled action {action_id} added!", llm, user_language)
-            
-            elif function_name == "delete_scheduled_action":
-                delete_scheduled_action(session, int(arguments['action_id']))
-                # await update.message.reply_text(f"Scheduled action {arguments['action_id']} deleted!")
-                action_id = arguments['action_id']
-                await send_message_to_user(context.bot, user_telegram_id, f"Scheduled action {action_id} deleted!", llm, user_language)
+        await save_conversation(session, user.id, message)
+        await process_llm_response(response, update, context, session, user, user_language)
 
         logger.info("User message handled successfully", telegram_id=user_telegram_id)
 
