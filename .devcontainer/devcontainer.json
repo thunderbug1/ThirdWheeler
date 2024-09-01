@@ -11,7 +11,14 @@
         "settings": {
             "terminal.integrated.shell.linux": "/bin/bash"
         },
-        "extensions": []
+        "extensions": [],
+        "vscode": {
+            "extensions": [
+                "ms-azuretools.vscode-docker",
+                "ms-python.python",
+                "eamodio.gitlens"
+            ]
+        }
     },
     "workspaceMount": "src=${localWorkspaceFolder},dst=/app,type=bind,consistency=cached",
     "postCreateCommand": ""
