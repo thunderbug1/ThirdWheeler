@@ -3,6 +3,7 @@
 import requests
 import structlog
 from sqlalchemy.orm import Session
+from models import User
 from models import Translation
 from database import SessionLocal
 
@@ -11,8 +12,23 @@ translation_cache = {}
 
 logger = structlog.get_logger()
 
+async def overwrite_summary(user_id: int, new_summary: str):
+    session = SessionLocal()
+    user = session.query(User).filter(User.id == user_id).first()
+    
+    if user:
+        user.summary = new_summary
+        session.commit()
+        session.close()
+        logger.info("User summary updated", user_id=user_id)
+        return "Summary updated successfully"
+    
+    session.close()
+    logger.error("Failed to update user summary", user_id=user_id)
+    return "Failed to update summary"
+
 class LLMWrapper:
-    def __init__(self, api_url="http://localhost:5000/v1", model_name="gpt-4o-mini"):
+    def __init__(self, api_url="http://host.docker.internal:11434/v1", model_name="llama3.1"):
         self.api_url = api_url
         self.model_name = model_name
 
@@ -40,7 +56,7 @@ class LLMWrapper:
         # Log the request being sent to the LLM
         logger.info("Sending request to LLM", messages=messages)
 
-        # Send the request to the locally hosted LLM
+        # Send the request to the locally hosted Llama 3.1 via Ollama API
         response = requests.post(
             f"{self.api_url}/chat/completions",
             json={
@@ -72,6 +88,8 @@ class LLMWrapper:
         return message_content
 
     def translate(self, text, target_language):
+        if target_language == "en":
+            return text # default strings are in english, no translation needed
         # Check local cache first
         if (text, target_language) in translation_cache:
             return translation_cache[(text, target_language)]
@@ -88,7 +106,7 @@ class LLMWrapper:
             session.close()
             return translation.translated_text
 
-        # If translation is not found, use the locally hosted LLM to translate
+        # If translation is not found, use the locally hosted LLM via Ollama to translate
         logger.info("Translating text", text=text, target_language=target_language)
         response = requests.post(
             f"{self.api_url}/completions",
@@ -121,7 +139,3 @@ class LLMWrapper:
         logger.info("Text translated successfully", original_text=text, translated_text=translated_text, target_language=target_language)
 
         return translated_text
-
-    def update_model(self, new_model_name):
-        self.model_name = new_model_name
-        logger.info("LLM model updated", model_name=new_model_name)

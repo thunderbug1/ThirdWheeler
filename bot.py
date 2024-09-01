@@ -6,13 +6,17 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Messa
 from database import SessionLocal
 from models import User, Couple, Conversation, UserActionLog, PendingCouple
 import os
-from scheduler import scheduler
+from scheduler import start_scheduler
+from database import init_db
 from datetime import datetime
 from llm import LLMWrapper
 import re
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 import secrets
+
+import dotenv
+dotenv.load_dotenv()
 
 # Configure structured logging with structlog
 structlog.configure(
@@ -23,7 +27,7 @@ structlog.configure(
 logger = structlog.get_logger()
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-llm = LLMWrapper(api_url="http://localhost:5000/v1")
+llm = LLMWrapper(api_url="http://host.docker.internal:11434/v1")
 
 RATE_LIMIT_SECONDS = 10
 CONFIRM_UNLINK, CONFIRM_DELETE = range(2)
@@ -38,6 +42,7 @@ def translate_message(llm, text, target_language):
 async def rate_limited(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = SessionLocal()
     user_telegram_id = update.effective_user.id
+    user_language = update.message.from_user.language_code or 'en'
     current_time = datetime.utcnow()
 
     user = session.query(User).filter(User.telegram_id == user_telegram_id).first()
@@ -49,7 +54,7 @@ async def rate_limited(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     last_action_time = session.query(func.max(UserActionLog.timestamp)).filter(UserActionLog.user_id == user.id).scalar()
     if last_action_time and (current_time - last_action_time).seconds < RATE_LIMIT_SECONDS:
-        translated_message = translate_message(llm, "You're doing that too much. Please slow down.", user.language_code or 'en')
+        translated_message = translate_message(llm, "You're doing that too much. Please slow down.", user_language)
         await update.message.reply_text(translated_message)
         session.close()
         logger.info("Rate limit enforced", user_id=user.id, telegram_id=user_telegram_id)
@@ -60,21 +65,6 @@ async def rate_limited(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session.commit()
     session.close()
     return False
-
-async def overwrite_summary(user_id: int, new_summary: str):
-    session = SessionLocal()
-    user = session.query(User).filter(User.id == user_id).first()
-    
-    if user:
-        user.summary = new_summary
-        session.commit()
-        session.close()
-        logger.info("User summary updated", user_id=user_id)
-        return "Summary updated successfully"
-    
-    session.close()
-    logger.error("Failed to update user summary", user_id=user_id)
-    return "Failed to update summary"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = SessionLocal()
@@ -194,7 +184,7 @@ async def add_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Partner link request sent", requester_id=user.id, requested_id=partner.id)
     session.close()
 
-async def unlink_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def remove_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await rate_limited(update, context):
         return
     
@@ -448,7 +438,7 @@ def main():
     application.add_handler(CommandHandler("delete_all_my_data", delete_all_my_data))
 
     unlink_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('unlink_partner', unlink_partner)],
+        entry_points=[CommandHandler('remove_partner', remove_partner)],
         states={
             CONFIRM_UNLINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_unlink)]
         },
