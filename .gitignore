@@ -1,0 +1,98 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+dist/
+build/
+*.pyo
+*.pyd
+
+# Virtual Environment
+venv/
+.env
+.env.*
+
+# Byte-compiled / optimized / DLL files
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.Python
+*.egg-info/
+.installed.cfg
+*.egg
+*.whl
+
+# Log files
+*.log
+
+# Test result files
+coverage.xml
+*.cover
+.hypothesis/
+
+# Docker
+docker-compose.override.yml
+# Avoid committing local dev databases or files
+*.db
+*.sqlite3
+*.pgsql
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment variables
+.env
+*.env
+
+# macOS
+.DS_Store
+
+# pyenv
+.python-version
+
+# Alembic
+alembic/versions/*.pyc
+alembic/versions/*.pyc
+
+# VS Code
+.vscode/
+
+# IDEs
+.idea/
+*.iml
+
+# PyCharm
+.idea/
+*.idea/
+
+# Pipenv
+Pipfile.lock
+
+# Specific directories
+__pycache__/
+docs/_build/
+*.mo
+*.pot
+*.po
+
+# C Extensions
+*.so
+
+# Coverage reports
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# MyPy
+.mypy_cache/
+
+# Pytest
+.pytest_cache/
+
+# Pyre type checker
+.pyre/
