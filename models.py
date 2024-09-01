@@ -11,6 +11,7 @@ class User(Base):
     telegram_id = Column(BigInteger, unique=True, nullable=False)
     name = Column(String, nullable=False)
     summary = Column(Text, nullable=True)
+    language = Column(String, nullable=True)
 
     conversations = relationship('Conversation', back_populates='user')
 
