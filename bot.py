@@ -1,8 +1,9 @@
+from datetime import datetime, timezone
 import structlog
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler
-from db_utils import get_session, get_current_user, check_user_linked
-from utils import get_translated_message, send_message_to_user, rate_limited
+from db_utils import add_scheduled_action, delete_scheduled_action, get_scheduled_actions_for_user, get_session, get_current_user, check_user_linked
+from utils import format_scheduled_actions, get_translated_message, send_message_to_user, rate_limited, update_user_language
 from models import User, Couple, PendingCouple, Conversation, ScheduledAction
 import os
 from scheduler import start_scheduler
@@ -27,50 +28,67 @@ llm = LLMWrapper(api_url="http://host.docker.internal:11434/v1")
 
 CONFIRM_UNLINK, CONFIRM_DELETE = range(2)
 
-async def link_users_and_notify(session, context, couple, current_user, requester, user_language):
+async def link_users_and_notify(session, context, couple, current_user, requester):
     session.add(couple)
     session.commit()
 
+    # Get the language preferences for both users, defaulting to 'en' if not set
+    requester_language = requester.language or 'en'
+    current_user_language = current_user.language or 'en'
+
+    # Notify requester
     requester_message = get_translated_message(
         llm,
         f"You are now linked with {current_user.name}!",
-        requester.language or 'en'
+        requester_language
     )
     await context.bot.send_message(chat_id=requester.telegram_id, text=requester_message)
 
-    requested_message = get_translated_message(
+    # Notify current user
+    current_user_message = get_translated_message(
         llm,
         f"You are now linked with {requester.name}!",
-        user_language
+        current_user_language
     )
-    await context.bot.send_message(chat_id=current_user.telegram_id, text=requested_message)
+    await context.bot.send_message(chat_id=current_user.telegram_id, text=current_user_message)
 
+    # Log the successful linking of the couple
     logger.info("Couple linked successfully", couple_id=couple.id)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with get_session() as session:
         token = context.args[0] if context.args else None
-        user_language = update.message.from_user.language_code or 'en'
+        telegram_user_language = update.message.from_user.language_code or 'en'
 
         logger.info("User started bot", telegram_id=update.effective_user.id)
 
         current_user = get_current_user(session, update.effective_user.id)
         if not current_user:
-            current_user = User(telegram_id=update.effective_user.id, name=update.effective_user.full_name)
+            current_user = User(telegram_id=update.effective_user.id, name=update.effective_user.full_name, language=telegram_user_language)
             session.add(current_user)
             session.commit()
             logger.info("New user registered", telegram_id=update.effective_user.id)
+        else:
+            # Update the user's language if it has changed
+            update_user_language(session, current_user, telegram_user_language)
 
         if token:
             pending_couple = session.query(PendingCouple).filter(PendingCouple.token == token).first()
 
             if pending_couple:
                 if pending_couple.requested_id is None:
+                    # Check if the current user is trying to link with themselves
+                    if pending_couple.requester_id == current_user.id:
+                        translated_message = get_translated_message(llm, "You cannot link with yourself.", telegram_user_language)
+                        await update.message.reply_text(translated_message)
+                        logger.warning("User attempted to link with themselves", telegram_id=update.effective_user.id)
+                        return
+
                     pending_couple.requested_id = current_user.id
 
                     requester = session.query(User).filter(User.id == pending_couple.requester_id).first()
                     if not requester:
-                        translated_message = get_translated_message(llm, "Error: Requester not found.", user_language)
+                        translated_message = get_translated_message(llm, "Error: Requester not found.", telegram_user_language)
                         await update.message.reply_text(translated_message)
                         logger.error("Requester not found", requester_id=pending_couple.requester_id)
                         return
@@ -82,7 +100,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     session.delete(pending_couple)
 
-                    await link_users_and_notify(session, context, couple, current_user, requester, user_language)
+                    await link_users_and_notify(session, context, couple, current_user, requester)
                 elif pending_couple.requested_id == current_user.id:
                     couple = Couple(
                         user1_id=pending_couple.requester_id,
@@ -92,17 +110,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     session.delete(pending_couple)
 
-                    await link_users_and_notify(session, context, couple, current_user, requester, user_language)
+                    await link_users_and_notify(session, context, couple, current_user, requester)
                 else:
-                    translated_message = get_translated_message(llm, "This link is not meant for you.", user_language)
+                    translated_message = get_translated_message(llm, "This link is not meant for you.", telegram_user_language)
                     await update.message.reply_text(translated_message)
                     logger.warning("Invalid link attempt", telegram_id=update.effective_user.id)
             else:
-                translated_message = get_translated_message(llm, "Invalid or expired link.", user_language)
+                translated_message = get_translated_message(llm, "Invalid or expired link.", telegram_user_language)
                 await update.message.reply_text(translated_message)
                 logger.warning("Expired or invalid link used", telegram_id=update.effective_user.id)
         else:
-            translated_message = get_translated_message(llm, f"Hello {update.effective_user.full_name}! Welcome to ThirdWheeler.", user_language)
+            translated_message = get_translated_message(llm, f"Hello {update.effective_user.full_name}! Welcome to ThirdWheeler.", telegram_user_language)
             await update.message.reply_text(translated_message)
 
 async def add_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,6 +135,9 @@ async def add_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_message_to_user(context.bot, update.effective_user.id, "Please start the bot first using /start.", llm, user_language)
             logger.warning("Attempted to get invite link without starting", telegram_id=update.effective_user.id)
             return
+
+        # Update the user's language if it has changed
+        update_user_language(session, user, user_language)
 
         existing_couple = check_user_linked(session, user.id)
 
@@ -144,6 +165,9 @@ async def remove_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         user = get_current_user(session, update.effective_user.id)
         user_language = update.message.from_user.language_code or 'en'
+
+        # Update the user's language if it has changed
+        update_user_language(session, user, user_language)
 
         couple = check_user_linked(session, user.id)
 
@@ -187,6 +211,9 @@ async def delete_all_my_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         user = get_current_user(session, update.effective_user.id)
         user_language = update.message.from_user.language_code or 'en'
+
+        # Update the user's language if it has changed
+        update_user_language(session, user, user_language)
 
         couple = check_user_linked(session, user.id)
 
@@ -257,15 +284,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = update.message.text
 
         user = get_current_user(session, user_telegram_id)
+        user_language = update.message.from_user.language_code or 'en'
 
         if not user:
-            user_language = update.message.from_user.language_code or 'en'
             await send_message_to_user(context.bot, user_telegram_id, "Please start the bot first using /start.", llm, user_language)
             logger.warning("User attempted to send a message without starting the bot", telegram_id=update.effective_user.id)
             return
 
+        # Update the user's language if it has changed
+        update_user_language(session, user, user_language)
+
         user_summary = user.summary if user.summary else ""
         user_history = session.query(Conversation).filter(Conversation.user_id == user.id).count()
+
+        # Retrieve and format the list of scheduled actions
+        scheduled_actions = get_scheduled_actions_for_user(session, user.id)
+        formatted_actions = format_scheduled_actions(scheduled_actions)
 
         context_messages = []
         if user_history == 0 and not user_summary:
@@ -281,12 +315,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             context_messages.append({"role": "system", "content": hidden_intro_message})
 
-        context_messages.append({"role": "user", "content": message})
+        # Add the current time as a system message
+        current_time = datetime.now(timezone.utc).isoformat()
+        system_time_message = f"The current system time is {current_time} UTC."
+        context_messages.append({"role": "system", "content": system_time_message})
 
-        user_language = update.message.from_user.language_code or 'en'
+        # Include the list of scheduled actions in the context
+        context_messages.append({"role": "system", "content": formatted_actions})
+
+        # Add the user's message to the context
+        context_messages.append({"role": "user", "content": message})
 
         logger.info("Handling user message", telegram_id=user_telegram_id, message=message)
 
+        # Start typing action
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+        # try:
         response = await llm.get_response(context_messages, summary=user_summary, user_language=user_language, functions=[
             {
                 "name": "overwrite_summary",
@@ -299,8 +344,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     },
                     "required": ["user_id", "new_summary"],
                 },
+            },
+            {
+            "name": "add_scheduled_action",
+            "description": "Add a new scheduled action for when you want to become active to send a message to the user.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "integer", "description": "The ID of the user."},
+                    "description": {"type": "string", "description": "The description of the action. Also mention the frequency if it is a recurring action."},
+                    "trigger_time": {"type": "string", "description": "The time to trigger the action, in ISO 8601 format."}
+                },
+                "required": ["user_id", "description", "trigger_time"]
             }
+        },
+        {
+            "name": "delete_scheduled_action",
+            "description": "Delete an existing scheduled action.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action_id": {"type": "integer", "description": "The ID of the action to delete."}
+                },
+                "required": ["action_id"]
+            }
+        }
         ])
+        # except Exception as ex:
+        #     logger.error(f"{ex}")
+        # # finally:
+            # Stop typing action
+            # await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=None)
 
         conversation = Conversation(
             couple_id=None,  # This is a user-specific interaction, not a couple interaction
@@ -309,15 +383,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         session.add(conversation)
 
-        translated_response = llm.translate(response['content'], user_language)
+        rsponse_content = response['content']
 
-        await update.message.reply_text(translated_response)
+        await update.message.reply_text(rsponse_content)
+
+        if response.get('function_call'):
+            function_name = response['function_call']['name']
+            arguments = response['function_call']['arguments']
+            
+            if function_name == "add_scheduled_action":
+                trigger_time = datetime.fromisoformat(arguments['trigger_time'])
+                action_id = add_scheduled_action(session, user.id, arguments['description'], trigger_time)
+                # await update.message.reply_text(f"Scheduled action {action_id} added!")
+                await send_message_to_user(context.bot, user_telegram_id, f"Scheduled action {action_id} added!", llm, user_language)
+            
+            elif function_name == "delete_scheduled_action":
+                delete_scheduled_action(session, int(arguments['action_id']))
+                # await update.message.reply_text(f"Scheduled action {arguments['action_id']} deleted!")
+                action_id = arguments['action_id']
+                await send_message_to_user(context.bot, user_telegram_id, f"Scheduled action {action_id} deleted!", llm, user_language)
 
         logger.info("User message handled successfully", telegram_id=user_telegram_id)
 
+
+import threading
+
 def main():
     init_db()
-    start_scheduler()
+
+    # Start the scheduler in a separate thread
+    scheduler_thread = threading.Thread(target=start_scheduler, args=(BOT_TOKEN,), daemon=True)
+    scheduler_thread.start()
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -348,6 +444,7 @@ def main():
     logger.info("Starting bot")
     application.run_polling()
     logger.info("Bot stopped")
+
 
 if __name__ == "__main__":
     main()

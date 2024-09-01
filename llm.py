@@ -37,7 +37,7 @@ class LLMWrapper:
 
         # Define the assistant's system prompt
         system_prompt = (
-            f"You are a helpful assistant called ThirdWheeler, designed to improve communication between couples. "
+            f"You are a helpful assistant Telegram bot called ThirdWheeler, designed to improve communication between couples. "
             f"Always respond in the user's preferred language: {user_language}. "
             "If the user's summary contains relevant details, incorporate that context into your responses. "
             "Help users communicate better by reminding them of things their partner might appreciate or want to see less often."
@@ -65,7 +65,7 @@ class LLMWrapper:
                 "functions": functions if functions else [],
                 "function_call": "auto"  # Automatically determine if a function call is needed
             }
-        )
+        ,timeout=60)
 
         # Handle possible errors in the API response
         if response.status_code != 200:

@@ -14,6 +14,7 @@ class User(Base):
     language = Column(String, nullable=True)
 
     conversations = relationship('Conversation', back_populates='user')
+    scheduled_actions = relationship('ScheduledAction', back_populates='user')
 
 class Couple(Base):
     __tablename__ = 'couples'
@@ -36,20 +37,18 @@ class Conversation(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
 
     couple = relationship('Couple', back_populates='conversations')
-    user = relationship('User')
+    user = relationship('User', back_populates='conversations')
 
 class ScheduledAction(Base):
     __tablename__ = 'scheduled_actions'
     
-    id = Column(BigInteger, primary_key=True)
-    couple_id = Column(BigInteger, ForeignKey('couples.id'))
+    id = Column(Integer, primary_key=True)
     user_id = Column(BigInteger, ForeignKey('users.id'))
-    action = Column(String, nullable=False)
-    trigger_time = Column(DateTime, nullable=False)
-    is_active = Column(Boolean, default=True)
+    description = Column(Text, nullable=False)  # Description of what will be done for the LLM
+    trigger_time = Column(DateTime, nullable=False)  # When the action should be triggered
+    is_active = Column(Boolean, default=True)  # Mark if the action is active
 
-    couple = relationship('Couple')
-    user = relationship('User')
+    user = relationship("User", back_populates="scheduled_actions")
 
 class UserActionLog(Base):
     __tablename__ = 'user_action_logs'

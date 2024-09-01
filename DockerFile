@@ -24,7 +24,7 @@ CMD ["python", "bot.py"]
 # Dev container configuration
 FROM core AS dev
 
-RUN apt-get update && apt-get install git
+RUN apt-get update && apt-get install git curl
 
 # Expose the port for the locally hosted LLM (if required)
 EXPOSE 5000

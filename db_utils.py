@@ -4,6 +4,9 @@ from contextlib import contextmanager
 from database import SessionLocal
 from models import User, Couple
 from sqlalchemy.exc import SQLAlchemyError
+from models import ScheduledAction
+from sqlalchemy.orm import Session
+from datetime import datetime
 
 @contextmanager
 def get_session() -> Session:
@@ -24,3 +27,27 @@ def check_user_linked(session: Session, user_id: int) -> Couple:
     return session.query(Couple).filter(
         (Couple.user1_id == user_id) | (Couple.user2_id == user_id)
     ).first()
+
+def get_scheduled_actions_for_user(session: Session, user_id: int):
+    return session.query(ScheduledAction).filter(
+        ScheduledAction.user_id == user_id,
+        ScheduledAction.is_active == True
+    ).all()
+
+
+def add_scheduled_action(session: Session, user_id: int, description: str, trigger_time: datetime):
+    action = ScheduledAction(
+        user_id=user_id,
+        description=description,
+        trigger_time=trigger_time,
+        is_active=True
+    )
+    session.add(action)
+    session.commit()
+    return action.id
+
+def delete_scheduled_action(session: Session, action_id: int):
+    action = session.query(ScheduledAction).filter(ScheduledAction.id == action_id).first()
+    if action:
+        session.delete(action)
+        session.commit()
