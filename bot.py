@@ -1,5 +1,4 @@
-# bot.py
-
+import secrets
 import structlog
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler
@@ -13,9 +12,8 @@ from llm import LLMWrapper
 import re
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
-import secrets
-
 import dotenv
+
 dotenv.load_dotenv()
 
 # Configure structured logging with structlog
@@ -65,7 +63,6 @@ async def rate_limited(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session.commit()
     session.close()
     return False
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = SessionLocal()
     token = context.args[0] if context.args else None
@@ -73,11 +70,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info("User started bot", telegram_id=update.effective_user.id)
 
+    # Ensure the current user exists in the users table
+    current_user = session.query(User).filter(User.telegram_id == update.effective_user.id).first()
+    if not current_user:
+        current_user = User(telegram_id=update.effective_user.id, name=update.effective_user.full_name)
+        session.add(current_user)
+        session.commit()
+        logger.info("New user registered", telegram_id=update.effective_user.id)
+
     if token:
         pending_couple = session.query(PendingCouple).filter(PendingCouple.token == token).first()
 
         if pending_couple:
-            if pending_couple.requested_id == update.effective_user.id:
+            if pending_couple.requested_id is None:
+                # Assign the current user as the requested_id
+                pending_couple.requested_id = current_user.id
+
+                # Ensure the requester exists in the users table
+                requester = session.query(User).filter(User.id == pending_couple.requester_id).first()
+                if not requester:
+                    translated_message = translate_message(llm, "Error: Requester not found.", user_language)
+                    await update.message.reply_text(translated_message)
+                    session.close()
+                    logger.error("Requester not found", requester_id=pending_couple.requester_id)
+                    return
+
                 # Create a Couple entry
                 couple = Couple(
                     user1_id=pending_couple.requester_id,
@@ -89,10 +106,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 session.delete(pending_couple)
                 session.commit()
 
-                translated_message = translate_message(llm, "Link confirmed! You are now linked with your partner.", user_language)
-                await update.message.reply_text(translated_message)
+                # Notify both users that they are now linked
+                requester_message = translate_message(
+                    llm,
+                    f"You are now linked with {current_user.name}!",
+                    requester.language or 'en'
+                )
+                await context.bot.send_message(chat_id=requester.telegram_id, text=requester_message)
+
+                requested_message = translate_message(
+                    llm,
+                    f"You are now linked with {requester.name}!",
+                    user_language
+                )
+                await context.bot.send_message(chat_id=current_user.telegram_id, text=requested_message)
+
+                logger.info("Couple linked successfully", couple_id=couple.id)
+            elif pending_couple.requested_id == current_user.id:
+                # The user is already the requested_id, link again (this might happen on a retry)
+                couple = Couple(
+                    user1_id=pending_couple.requester_id,
+                    user2_id=pending_couple.requested_id
+                )
+                session.add(couple)
+
+                # Remove the pending request
+                session.delete(pending_couple)
+                session.commit()
+
+                # Notify both users that they are now linked
+                requester_message = translate_message(
+                    llm,
+                    f"You are now linked with {current_user.name}!",
+                    requester.language or 'en'
+                )
+                await context.bot.send_message(chat_id=requester.telegram_id, text=requester_message)
+
+                requested_message = translate_message(
+                    llm,
+                    f"You are now linked with {requester.name}!",
+                    user_language
+                )
+                await context.bot.send_message(chat_id=current_user.telegram_id, text=requested_message)
+
                 logger.info("Couple linked successfully", couple_id=couple.id)
             else:
+                # The link is valid but it's not meant for this user
                 translated_message = translate_message(llm, "This link is not meant for you.", user_language)
                 await update.message.reply_text(translated_message)
                 logger.warning("Invalid link attempt", telegram_id=update.effective_user.id)
@@ -101,13 +160,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(translated_message)
             logger.warning("Expired or invalid link used", telegram_id=update.effective_user.id)
     else:
-        user = session.query(User).filter(User.telegram_id == update.effective_user.id).first()
-        if not user:
-            user = User(telegram_id=update.effective_user.id, name=update.effective_user.full_name)
-            session.add(user)
-            session.commit()
-            logger.info("New user registered", telegram_id=update.effective_user.id)
-
         translated_message = translate_message(llm, f"Hello {update.effective_user.full_name}! Welcome to ThirdWheeler.", user_language)
         await update.message.reply_text(translated_message)
     
@@ -121,67 +173,40 @@ async def add_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = session.query(User).filter(User.telegram_id == update.effective_user.id).first()
     user_language = update.message.from_user.language_code or 'en'
 
+    if not user:
+        translated_message = translate_message(llm, "Please start the bot first using /start.", user_language)
+        await update.message.reply_text(translated_message)
+        session.close()
+        logger.warning("Attempted to get invite link without starting", telegram_id=update.effective_user.id)
+        return
+
     # Check if the user is already part of a couple
     existing_couple = session.query(Couple).filter(
         (Couple.user1_id == user.id) | (Couple.user2_id == user.id)
     ).first()
 
     if existing_couple:
-        translated_message = translate_message(llm, "You are already linked with a partner. You cannot add another partner.", user_language)
+        translated_message = translate_message(llm, "You are already linked with a partner. Remove that link first with /remove_partner", user_language)
         await update.message.reply_text(translated_message)
         session.close()
-        logger.warning("User attempted to add a second partner", telegram_id=update.effective_user.id)
+        logger.warning("Attempted to get invite link while already linked.", telegram_id=update.effective_user.id)
         return
 
-    if len(context.args) == 0:
-        translated_message = translate_message(llm, "Please provide a partner's username or Telegram ID.", user_language)
-        await update.message.reply_text(translated_message)
-        session.close()
-        logger.warning("Add partner command missing arguments", telegram_id=update.effective_user.id)
-        return
-
-    partner_identifier = context.args[0]
-
-    if partner_identifier.startswith('@'):
-        partner_username = partner_identifier.lstrip('@')
-        if not validate_username(partner_username):
-            translated_message = translate_message(llm, "Invalid username format.", user_language)
-            await update.message.reply_text(translated_message)
-            session.close()
-            logger.warning("Invalid username format", telegram_id=update.effective_user.id, username=partner_username)
-            return
-        partner = session.query(User).filter(User.name == partner_username).first()
-    else:
-        if not partner_identifier.isdigit():
-            translated_message = translate_message(llm, "Invalid Telegram ID format.", user_language)
-            await update.message.reply_text(translated_message)
-            session.close()
-            logger.warning("Invalid Telegram ID format", telegram_id=update.effective_user.id, telegram_id_input=partner_identifier)
-            return
-        partner = session.query(User).filter(User.telegram_id == int(partner_identifier)).first()
-
-    if not partner:
-        translated_message = translate_message(llm, "Couldn't find the partner. Ensure they have interacted with the bot.", user_language)
-        await update.message.reply_text(translated_message)
-        session.close()
-        logger.warning("Partner not found", telegram_id=update.effective_user.id, partner_input=partner_identifier)
-        return
-
-    # Create a pending couple entry
+    # Generate a unique token for the invite link
     token = secrets.token_urlsafe(16)
     pending_couple = PendingCouple(
         requester_id=user.id,
-        requested_id=partner.id,
+        requested_id=None,
         token=token
     )
     session.add(pending_couple)
     session.commit()
 
-    # Notify the user to inform their partner to confirm the request
-    confirm_link = f"https://t.me/{context.bot.username}?start={token}"
-    translated_message = translate_message(llm, f"Link request sent! Ask your partner to confirm using this link: {confirm_link}", user_language)
+    invite_link = f"https://t.me/{context.bot.username}?start={token}"
+    translated_message = translate_message(llm, f"Here is your invite link: {invite_link}\nShare this with your partner to link your chats.", user_language)
     await update.message.reply_text(translated_message)
-    logger.info("Partner link request sent", requester_id=user.id, requested_id=partner.id)
+    logger.info("Invite link generated", user_id=user.id, invite_link=invite_link)
+    
     session.close()
 
 async def remove_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
