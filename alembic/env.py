@@ -5,27 +5,15 @@ import sys
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
-from dotenv import load_dotenv
-import os
-
-# Load environment variables from the .env file
-load_dotenv()
+from settings import settings
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
-
-# Construct the database URL from environment variables
-db_user = os.getenv('POSTGRES_USER')
-db_password = os.getenv('POSTGRES_PASSWORD')
-db_name = os.getenv('POSTGRES_DB')
-db_host = os.getenv('POSTGRES_HOST', 'localhost')
-db_port = os.getenv('POSTGRES_PORT', '5432')
-
-db_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+db_url = f"postgresql://{settings.db_user}:{settings.db_password}@{settings.db_host}:{settings.db_port}/{settings.db_name}"
 
 # Set the SQLAlchemy URL in Alembic config dynamically
-config.set_main_option('sqlalchemy.url', db_url)
+config.set_main_option('sqlalchemy.url', settings.DATABASE_URL)
 
 # Interpret the config file for Python logging.
 fileConfig(config.config_file_name)
