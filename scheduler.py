@@ -79,7 +79,7 @@ def trigger_action(session: Session, bot: Bot, llm: LLMWrapper, action: Schedule
 
         try:
             llm_response = llm.get_response(context_messages)
-            message = llm_response['content']
+            message = llm_response.content
         except Exception as e:
             logger.error("Failed to generate message with LLM", action_id=action.id, error=str(e))
             message = f"Reminder: {action.description}"  # Fallback to the description

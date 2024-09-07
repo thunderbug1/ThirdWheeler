@@ -2,17 +2,15 @@ import structlog
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler
 from db_utils import  get_session, get_current_user, check_user_linked
+from tools import build_call_tool_function, get_llm_functions
 from utils import get_translated_message, send_message_to_user, rate_limited, update_user_language
 from models import User, Couple, PendingCouple, Conversation, ScheduledAction
-import os
 from scheduler import start_scheduler
 from database import init_db
-from llm import LLMWrapper, get_llm_functions, get_user_summary, prepare_context_messages, process_llm_response, save_conversation, setup_llm
+from llm import LLMWrapper, get_user_summary, prepare_context_messages, save_conversation, setup_llm
 import secrets
 from sqlalchemy.exc import SQLAlchemyError
-import dotenv
-
-dotenv.load_dotenv()
+from settings import settings
 
 # Configure structured logging with structlog
 structlog.configure(
@@ -22,7 +20,6 @@ structlog.configure(
 )
 logger = structlog.get_logger()
 
-BOT_TOKEN = os.getenv('BOT_TOKEN')
 llm = setup_llm()
 
 CONFIRM_UNLINK, CONFIRM_DELETE = range(2)
@@ -274,6 +271,7 @@ async def cancel_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Data deletion process cancelled", telegram_id=update.effective_user.id)
     return ConversationHandler.END
 
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with get_session() as session:
         if await rate_limited(update, context, session, llm):
@@ -304,11 +302,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context_messages, 
             summary=user_summary, 
             user_language=user_language, 
-            functions=get_llm_functions()
+            tools=get_llm_functions(),
+            call_tool=build_call_tool_function(context, session, llm, user, user_language)
         )
 
+        response_content = response.content
+        await update.message.reply_text(response_content)
+
         await save_conversation(session, user.id, message)
-        await process_llm_response(response, update, context, session, user, user_language)
 
         logger.info("User message handled successfully", telegram_id=user_telegram_id)
 
@@ -319,10 +320,10 @@ def main():
     init_db()
 
     # Start the scheduler in a separate thread
-    scheduler_thread = threading.Thread(target=start_scheduler, args=(BOT_TOKEN,), daemon=True)
+    scheduler_thread = threading.Thread(target=start_scheduler, args=(settings.BOT_TOKEN), daemon=True)
     scheduler_thread.start()
 
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    application = ApplicationBuilder().token(settings.BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("add_partner", add_partner))

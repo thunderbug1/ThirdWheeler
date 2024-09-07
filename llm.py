@@ -1,36 +1,27 @@
 import os
-import openai
+from typing import Coroutine
+from openai import OpenAI
 import requests
 import structlog
 from sqlalchemy.orm import Session
-from telegram import Update
-from telegram.ext import ContextTypes
-from db_utils import add_scheduled_action, delete_scheduled_action, get_scheduled_actions_for_user
+from db_utils import get_scheduled_actions_for_user
 from models import Conversation, User, Translation
 from database import SessionLocal
-from utils import format_scheduled_actions, send_message_to_user
+from utils import format_scheduled_actions
 from datetime import datetime, timezone
 import json
+from datetime import datetime
+from settings import settings
+from openai.types.chat.chat_completion_message import ChatCompletionMessage
 
+client = OpenAI(api_key=settings.openai_api_key)
 # Create a cache for translations
 translation_cache = {}
 
 logger = structlog.get_logger()
 
-def overwrite_summary(user_id: int, new_summary: str):
-    session = SessionLocal()
-    user = session.query(User).filter(User.id == user_id).first()
-    
-    if user:
-        user.summary = new_summary
-        session.commit()
-        session.close()
-        logger.info("User summary updated", user_id=user_id)
-        return "Summary updated successfully"
-    
-    session.close()
-    logger.error("Failed to update user summary", user_id=user_id)
-    return "Failed to update summary"
+async def dummy():
+    raise NotImplementedError
 
 class LLMWrapper:
     def __init__(self, api_url="http://host.docker.internal:11434/v1", model_name="llama3.1", use_openai=False):
@@ -38,7 +29,7 @@ class LLMWrapper:
         self.model_name = model_name
         self.use_openai = use_openai  # Switch between using OpenAI and the locally hosted model
 
-    async def get_response(self, context, summary=None, user_language='en', functions=None) -> dict:
+    async def get_response(self, context, summary=None, user_language='en', tools=None, call_tool : Coroutine = dummy) -> ChatCompletionMessage:
         messages = []
 
         # Define the assistant's system prompt
@@ -64,13 +55,34 @@ class LLMWrapper:
 
         if self.use_openai:
             # Use OpenAI's API
-            response = openai.ChatCompletion.create(
-                model=self.model_name,
+            response = client.chat.completions.create(model=self.model_name,
+            messages=messages,
+            tools=tools if tools else [],
+            tool_choice="auto",  # Automatically determine if a function call is needed
+            timeout=60)
+
+            
+            # Process the model's response
+            choice = response.choices[0]
+            response_message = choice.message
+            messages.append(response_message)
+
+            if choice.message.tool_calls:
+                for tool_call in choice.message.tool_calls:
+                    arguments = json.loads(tool_call.function.arguments)
+                    function_name = tool_call.function.name
+                    tool_result = await call_tool(function_name, arguments)
+                    logger.info("Function call processing completed", function_name=function_name)
+                    messages.append({"role": "tool", 
+                                              "name": function_name,
+                                              "content": tool_result, 
+                                              "tool_call_id": tool_call.id})
+
+                response = client.chat.completions.create(model=self.model_name,
                 messages=messages,
-                functions=functions if functions else [],
-                function_call="auto",  # Automatically determine if a function call is needed
-                timeout=60
-            )
+                timeout=60)
+            else:
+                logger.info("no function calls were made")
 
             message_content = response.choices[0].message
         else:
@@ -92,13 +104,6 @@ class LLMWrapper:
 
             response_json = response.json()
             message_content = response_json['choices'][0]['message']
-
-        if message_content.get("function_call"):
-            function_name = message_content["function_call"]["name"]
-            function_args = message_content["function_call"]["arguments"]
-
-            if function_name == "overwrite_summary":
-                overwrite_summary(int(function_args['user_id']), function_args['new_summary'])
 
         # Log the response received from the LLM
         logger.info("Received response from LLM", response=message_content)
@@ -126,11 +131,9 @@ class LLMWrapper:
 
         # If translation is not found, use the locally hosted LLM or OpenAI API to translate
         if self.use_openai:
-            response = openai.Completion.create(
-                model=self.model_name,
-                prompt=f"Translate the following text to {target_language}: {text}",
-                max_tokens=60
-            )
+            response = client.completions.create(model=self.model_name,
+            prompt=f"Translate the following text to {target_language}: {text}",
+            max_tokens=60)
             translated_text = response.choices[0].text.strip()
         else:
             response = requests.post(
@@ -167,9 +170,9 @@ class LLMWrapper:
 
 
 def setup_llm() -> LLMWrapper:
-    llm = LLMWrapper(api_url=os.getenv("LLM_URL", ""), 
-                     model_name=os.getenv("LLM_MODEL"), 
-                     use_openai=os.getenv("USE_OPENAI_LLM").lower() == "true")
+    llm = LLMWrapper(api_url=settings.llm_url, 
+                     model_name=settings.llm_model, 
+                     use_openai=settings.use_openai_llm)
     return llm
 
 def get_user_summary(user: User) -> str:
@@ -204,46 +207,6 @@ def get_hidden_intro_message() -> str:
         "Once this information is gathered, store it in the user's summary so that you don't need to ask again."
     )
 
-def get_llm_functions() -> list:
-    return [
-        {
-            "name": "overwrite_summary",
-            "description": "Overwrite the user's summary with new information.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "user_id": {"type": "integer", "description": "The ID of the user."},
-                    "new_summary": {"type": "string", "description": "The new summary of the user."},
-                },
-                "required": ["user_id", "new_summary"],
-            },
-        },
-        {
-            "name": "add_scheduled_action",
-            "description": "Add a new scheduled action for when you want to become active to send a message to the user. Avoid redundant scheduled actions.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "user_id": {"type": "integer", "description": "The ID of the user."},
-                    "description": {"type": "string", "description": "The description of the action. Also mention the frequency if it is a recurring action."},
-                    "trigger_time": {"type": "string", "description": "The time to trigger the action, in ISO 8601 format."}
-                },
-                "required": ["user_id", "description", "trigger_time"]
-            }
-        },
-        {
-            "name": "delete_scheduled_action",
-            "description": "Delete an existing scheduled action.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action_id": {"type": "integer", "description": "The ID of the action to delete."}
-                },
-                "required": ["action_id"]
-            }
-        }
-    ]
-
 async def save_conversation(session: Session, user_id: int, message: str):
     conversation = Conversation(
         couple_id=None,  # This is a user-specific interaction, not a couple interaction
@@ -251,30 +214,4 @@ async def save_conversation(session: Session, user_id: int, message: str):
         message=message
     )
     session.add(conversation)
-
-
-
-async def process_llm_response(response: dict, update: Update, context: ContextTypes.DEFAULT_TYPE, session: Session, user: User, user_language: str):
-    response_content = response['content']
-    await update.message.reply_text(response_content)
-
-    if 'function_call' in response:
-        function_name = response['function_call']['name']
-        arguments = json.loads(response['function_call']['arguments'])  # Parse arguments as JSON
-
-        if function_name == "add_scheduled_action":
-            trigger_time = datetime.fromisoformat(arguments['trigger_time'])
-            action_id = add_scheduled_action(session, user.id, arguments['description'], trigger_time)
-            await send_message_to_user(context.bot, user.telegram_id, f"Scheduled action {action_id} added!", llm, user_language)
-        
-        elif function_name == "delete_scheduled_action":
-            delete_scheduled_action(session, int(arguments['action_id']))
-            action_id = arguments['action_id']
-            await send_message_to_user(context.bot, user.telegram_id, f"Scheduled action {action_id} deleted!", llm, user_language)
-        else:
-            logger.warning(f"Unknown function call: {function_name}")
-
-        logger.info("Function call processing completed", function_name=function_name)
-    else:
-        logger.info("no function calls were made")
 

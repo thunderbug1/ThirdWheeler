@@ -7,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from models import ScheduledAction
 from sqlalchemy.orm import Session
 from datetime import datetime
+from dateutil import parser
 
 @contextmanager
 def get_session() -> Session:
@@ -34,12 +35,14 @@ def get_scheduled_actions_for_user(session: Session, user_id: int):
         ScheduledAction.is_active == True
     ).all()
 
-
-def add_scheduled_action(session: Session, user_id: int, description: str, trigger_time: datetime):
+def add_scheduled_action(session: Session, user_id: int, description: str, trigger_time: str):
+    # Parse the trigger_time string into a datetime object
+    trigger_time_dt = parser.parse(trigger_time)
+    
     action = ScheduledAction(
         user_id=user_id,
         description=description,
-        trigger_time=trigger_time,
+        trigger_time=trigger_time_dt,
         is_active=True
     )
     session.add(action)
