@@ -35,14 +35,14 @@ def get_scheduled_actions_for_user(session: Session, user_id: int):
         ScheduledAction.is_active == True
     ).all()
 
-def add_scheduled_action(session: Session, user_id: int, description: str, trigger_time: str):
+def add_scheduled_action(session: Session, user_id: int, description: str, trigger_time: datetime):
     # Parse the trigger_time string into a datetime object
-    trigger_time_dt = parser.parse(trigger_time)
+    # trigger_time_dt = parser.parse(trigger_time)
     
     action = ScheduledAction(
         user_id=user_id,
         description=description,
-        trigger_time=trigger_time_dt,
+        trigger_time=trigger_time,
         is_active=True
     )
     session.add(action)
