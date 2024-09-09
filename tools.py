@@ -24,19 +24,19 @@ class BaseAction(BaseModel):
     async def execute(cls, context, session, llm, user, user_language, arguments: dict):
         raise NotImplementedError("Execute method must be implemented in subclasses.")
 
-    @staticmethod
-    def with_db_session(func):
-        """Decorator to handle database session management."""
-        async def wrapper(*args, **kwargs):
-            session = SessionLocal()
-            try:
-                return await func(*args, session=session, **kwargs)  # Pass session through kwargs
-            except Exception as e:
-                logger.error(f"Database error: {e}")
-                return "An error occurred"
-            finally:
-                session.close()
-        return wrapper
+    # @staticmethod
+    # def with_db_session(func):
+    #     """Decorator to handle database session management."""
+    #     async def wrapper(*args, **kwargs):
+    #         session = SessionLocal()
+    #         try:
+    #             return await func(*args, session=session, **kwargs)  # Pass session through kwargs
+    #         except Exception as e:
+    #             logger.error(f"Database error: {e}")
+    #             return "An error occurred"
+    #         finally:
+    #             session.close()
+    #     return wrapper
 
 # Models for specific actions
 class OverwriteSummary(BaseAction):
@@ -47,7 +47,7 @@ class OverwriteSummary(BaseAction):
     new_summary: str = Field(..., description="The new summary of the user.")
 
     @classmethod
-    @BaseAction.with_db_session
+    # @BaseAction.with_db_session
     async def execute(cls, context, session, llm, user, user_language, arguments: dict):
         user = session.query(User).filter(User.id == arguments['user_id']).first()
         if user:
@@ -59,7 +59,7 @@ class OverwriteSummary(BaseAction):
         return "Failed to update summary"
 
 class AddScheduledAction(BaseAction):
-    """Add a new scheduled action to send a message to the user."""
+    """Schedule an action in the future. Use this tool whenever you plan to do something in the future."""
     function_name: ClassVar[str] = "add_scheduled_action"
 
     user_id: int = Field(..., description="The ID of the user.")
@@ -67,7 +67,7 @@ class AddScheduledAction(BaseAction):
     trigger_time: str = Field(..., description="The trigger time in ISO 8601 format.")
 
     @classmethod
-    @BaseAction.with_db_session
+    # @BaseAction.with_db_session
     async def execute(cls, context, session, llm, user, user_language, arguments: dict):
         trigger_time = datetime.fromisoformat(arguments['trigger_time'])
         action_id = add_scheduled_action(session, user.id, arguments['description'], trigger_time)
@@ -80,7 +80,7 @@ class DeleteScheduledAction(BaseAction):
     action_id: int = Field(..., description="The ID of the action to delete.")
 
     @classmethod
-    @BaseAction.with_db_session
+    # @BaseAction.with_db_session
     async def execute(cls, context, session, llm, user, user_language, arguments: dict) -> str:
         delete_scheduled_action(session, int(arguments['action_id']))
         await send_message_to_user(context.bot, user.telegram_id, f"Scheduled action {arguments['action_id']} deleted!", llm, user_language)
@@ -104,7 +104,7 @@ def get_action_class_by_function_name(function_name: str):
 # Unified execution handler using dynamic class method calling
 async def execute_tool(context, session, llm, user, user_language, function_name: str, arguments: dict) -> str:
     """Handle execution of different tool functions by dynamically calling the respective class methods.
-    
+
         returns a feedback string for the llm """
     try:
         action_class = get_action_class_by_function_name(function_name)
