@@ -21,7 +21,7 @@ class BaseAction(BaseModel):
         extra = "forbid"
 
     @classmethod
-    async def execute(cls, context, session, llm, user, user_language, arguments: dict):
+    async def execute(cls, bot, session, llm, user, user_language, arguments: dict):
         raise NotImplementedError("Execute method must be implemented in subclasses.")
 
     # @staticmethod
@@ -48,7 +48,7 @@ class OverwriteSummary(BaseAction):
 
     @classmethod
     # @BaseAction.with_db_session
-    async def execute(cls, context, session, llm, user, user_language, arguments: dict):
+    async def execute(cls, bot, session, llm, user, user_language, arguments: dict):
         user = session.query(User).filter(User.id == arguments['user_id']).first()
         if user:
             user.summary = arguments['new_summary']
@@ -59,7 +59,8 @@ class OverwriteSummary(BaseAction):
         return "Failed to update summary"
 
 class AddScheduledAction(BaseAction):
-    """Schedule an action in the future. Use this tool whenever you plan to do something in the future."""
+    """Schedule an action in the future. Use this tool whenever you plan to do something in the future. 
+    Make sure to add the description of the desired action frequency to the action description for future rescheduling since only one action is scheduled at a time and after triggering it, the next action is scheduled."""
     function_name: ClassVar[str] = "add_scheduled_action"
 
     user_id: int = Field(..., description="The ID of the user.")
@@ -68,10 +69,10 @@ class AddScheduledAction(BaseAction):
 
     @classmethod
     # @BaseAction.with_db_session
-    async def execute(cls, context, session, llm, user, user_language, arguments: dict):
+    async def execute(cls, bot, session, llm, user, user_language, arguments: dict):
         trigger_time = datetime.fromisoformat(arguments['trigger_time'])
-        action_id = add_scheduled_action(session, user.id, arguments['description'], trigger_time)
-        await send_message_to_user(context.bot, user.telegram_id, f"Scheduled action {action_id} added!", llm, user_language)
+        action_id = add_scheduled_action(session, user.telegram_id, arguments['description'], trigger_time)
+        await send_message_to_user(bot, user.telegram_id, f"Scheduled action {action_id} added!", llm, user_language)
 
 class DeleteScheduledAction(BaseAction):
     """Delete an existing scheduled action."""
@@ -81,9 +82,9 @@ class DeleteScheduledAction(BaseAction):
 
     @classmethod
     # @BaseAction.with_db_session
-    async def execute(cls, context, session, llm, user, user_language, arguments: dict) -> str:
+    async def execute(cls, bot, session, llm, user, user_language, arguments: dict) -> str:
         delete_scheduled_action(session, int(arguments['action_id']))
-        await send_message_to_user(context.bot, user.telegram_id, f"Scheduled action {arguments['action_id']} deleted!", llm, user_language)
+        await send_message_to_user(bot, user.telegram_id, f"Scheduled action {arguments['action_id']} deleted!", llm, user_language)
         return "tool call succesfully deleted scheduled action"
 
 # Function to retrieve LLM tools
@@ -102,14 +103,14 @@ def get_action_class_by_function_name(function_name: str):
     return None
 
 # Unified execution handler using dynamic class method calling
-async def execute_tool(context, session, llm, user, user_language, function_name: str, arguments: dict) -> str:
+async def execute_tool(bot, session, llm, user, user_language, function_name: str, arguments: dict) -> str:
     """Handle execution of different tool functions by dynamically calling the respective class methods.
 
         returns a feedback string for the llm """
     try:
         action_class = get_action_class_by_function_name(function_name)
         if action_class:
-            await action_class.execute(context, session, llm, user, user_language, arguments)
+            await action_class.execute(bot, session, llm, user, user_language, arguments)
             return f"successfully executed tool {function_name}"
         else:
             logger.warning(f"Unknown function call: {function_name}")
@@ -119,5 +120,5 @@ async def execute_tool(context, session, llm, user, user_language, function_name
         return f"Error executing tool {function_name}: {e}"
 
 # Factory to build tool function handler
-def build_call_tool_function(context, session, llm, user, user_language):
-    return lambda function_name, arguments: execute_tool(context, session, llm, user, user_language, function_name, arguments)
+def build_call_tool_function(bot, session, llm, user, user_language):
+    return lambda function_name, arguments: execute_tool(bot, session, llm, user, user_language, function_name, arguments)

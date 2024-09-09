@@ -29,7 +29,7 @@ class LLMWrapper:
         self.model_name = model_name
         self.use_openai = use_openai  # Switch between using OpenAI and the locally hosted model
 
-    async def get_response(self, context, summary=None, user_language='en', tools=None, call_tool : Coroutine = dummy) -> ChatCompletionMessage:
+    async def get_response(self, context_messages, summary=None, user_language='en', tools=None, call_tool : Coroutine = dummy) -> ChatCompletionMessage:
         messages = []
 
         # Define the assistant's system prompt
@@ -48,7 +48,8 @@ class LLMWrapper:
             messages.append({"role": "system", "content": f"User summary: {summary}"})
 
         # Append the conversation context
-        messages.extend(context)
+        if context_messages and len(context_messages) > 0:
+            messages.extend(context_messages)
 
         # Log the request being sent to the LLM
         logger.info("Sending request to LLM", messages=messages)

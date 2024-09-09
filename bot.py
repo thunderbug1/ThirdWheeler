@@ -1,3 +1,4 @@
+import asyncio
 import structlog
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler
@@ -303,7 +304,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             summary=user_summary, 
             user_language=user_language, 
             tools=get_llm_functions(),
-            call_tool=build_call_tool_function(context, session, llm, user, user_language)
+            call_tool=build_call_tool_function(context.bot, session, llm, user, user_language)
         )
 
         response_content = response.content
@@ -320,7 +321,10 @@ def main():
     init_db()
 
     # Start the scheduler in a separate thread
-    scheduler_thread = threading.Thread(target=start_scheduler, args=(settings.BOT_TOKEN,), daemon=True)
+    # scheduler_thread = threading.Thread(target=start_scheduler, args=(settings.BOT_TOKEN,), daemon=True)
+    # scheduler_thread.start()
+
+    scheduler_thread = threading.Thread(target=lambda: asyncio.run(start_scheduler(settings.BOT_TOKEN)), daemon=True)
     scheduler_thread.start()
 
     application = ApplicationBuilder().token(settings.BOT_TOKEN).build()

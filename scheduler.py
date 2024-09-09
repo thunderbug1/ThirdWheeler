@@ -1,3 +1,4 @@
+import asyncio
 import time
 import structlog
 from datetime import datetime, timezone
@@ -5,12 +6,14 @@ from sqlalchemy.orm import Session
 from telegram import Bot
 from models import ScheduledAction, Conversation
 from db_utils import get_session, get_current_user
+from tools import build_call_tool_function, get_llm_functions
 from utils import send_message_to_user
-from llm import setup_llm, LLMWrapper
+from llm import get_user_summary, setup_llm, LLMWrapper
 
 logger = structlog.get_logger()
 
-def start_scheduler(bot_token: str):
+
+async def start_scheduler(bot_token: str):
     bot = Bot(token=bot_token)
     llm = setup_llm()
     logger.info("Scheduler started")
@@ -25,7 +28,7 @@ def start_scheduler(bot_token: str):
 
             for action in actions_to_trigger:
                 try:
-                    trigger_action(session, bot, llm, action)
+                    await trigger_action(session, bot, llm, action)  # Use 'await' for async trigger
                     # Mark the action as inactive after triggering
                     action.is_active = False
                     session.commit()
@@ -33,9 +36,12 @@ def start_scheduler(bot_token: str):
                     logger.error("Failed to trigger scheduled action", action_id=action.id, error=str(e))
                     session.rollback()
 
-        time.sleep(60)  # Check every minute
+        await asyncio.sleep(60)  # Use asyncio.sleep to avoid blocking the event loop
+
 
 def format_time_since(timestamp):
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
     time_diff = now - timestamp
 
@@ -53,7 +59,7 @@ def format_time_since(timestamp):
     else:
         return "just now"
 
-def trigger_action(session: Session, bot: Bot, llm: LLMWrapper, action: ScheduledAction):
+async def trigger_action(session: Session, bot: Bot, llm: LLMWrapper, action: ScheduledAction):
     user = get_current_user(session, action.user_id)
 
     if user:
@@ -73,18 +79,24 @@ def trigger_action(session: Session, bot: Bot, llm: LLMWrapper, action: Schedule
 
         # Prepare the LLM context with the recent messages and action description
         context_messages = recent_messages + [
-            {"role": "system", "content": "Generate a message for the following action based on the recent conversation context."},
+            {"role": "system", "content": "Generate a message for the following action based on the recent conversation context. Do not re-execute the commands from the recent conversation. If it is supposed to be a recurring action, schedule the next action trigger and make sure to add the description of the desired action frequency to the action description for future rescheduling since only one action is scheduled at a time and after triggering it, the next action is scheduled."},
             {"role": "user", "content": f"Action description: {action.description}"}
         ]
 
-        try:
-            llm_response = llm.get_response(context_messages)
-            message = llm_response.content
-        except Exception as e:
-            logger.error("Failed to generate message with LLM", action_id=action.id, error=str(e))
-            message = f"Reminder: {action.description}"  # Fallback to the description
+        user_summary = get_user_summary(user)
 
-        send_message_to_user(bot, user.telegram_id, message, llm=None, user_language=user.language)
+        # try:
+        llm_response = await llm.get_response(context_messages,  
+                                              summary=user_summary,           
+                                              user_language=user.language, 
+                                                tools=get_llm_functions(),
+                                                call_tool=build_call_tool_function(bot, session, llm, user, user.language))
+        message = llm_response.content
+        # except Exception as e:
+        #     logger.error("Failed to generate message with LLM", action_id=action.id, error=str(e))
+        #     message = f"Reminder: {action.description}"  # Fallback to the description
+
+        await send_message_to_user(bot, user.telegram_id, message, llm=llm, user_language=user.language)
         logger.info("Triggered scheduled action", action_id=action.id, user_id=action.user_id)
     else:
         logger.warning("User not found for scheduled action", action_id=action.id, user_id=action.user_id)
