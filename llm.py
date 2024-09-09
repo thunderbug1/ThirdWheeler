@@ -180,8 +180,8 @@ def get_user_summary(user: User) -> str:
     return user.summary if user.summary else ""
 
 def prepare_context_messages(session: Session, user: User, user_summary: str, message: str) -> list:
-    user_history = session.query(Conversation).filter(Conversation.user_id == user.id).count()
-    scheduled_actions = get_scheduled_actions_for_user(session, user.id)
+    user_history = session.query(Conversation).filter(Conversation.user_id == user.telegram_id).count()
+    scheduled_actions = get_scheduled_actions_for_user(session, user.telegram_id)
     formatted_actions = format_scheduled_actions(scheduled_actions)
 
     context_messages = []

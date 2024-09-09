@@ -75,15 +75,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if pending_couple:
                 if pending_couple.requested_id is None:
                     # Check if the current user is trying to link with themselves
-                    if pending_couple.requester_id == current_user.id:
+                    if pending_couple.requester_id == current_user.telegram_id:
                         translated_message = get_translated_message(llm, "You cannot link with yourself.", telegram_user_language)
                         await update.message.reply_text(translated_message)
                         logger.warning("User attempted to link with themselves", telegram_id=update.effective_user.id)
                         return
 
-                    pending_couple.requested_id = current_user.id
+                    pending_couple.requested_id = current_user.telegram_id
 
-                    requester = session.query(User).filter(User.id == pending_couple.requester_id).first()
+                    requester = session.query(User).filter(User.telegram_id == pending_couple.requester_id).first()
                     if not requester:
                         translated_message = get_translated_message(llm, "Error: Requester not found.", telegram_user_language)
                         await update.message.reply_text(translated_message)
@@ -98,7 +98,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     session.delete(pending_couple)
 
                     await link_users_and_notify(session, context, couple, current_user, requester)
-                elif pending_couple.requested_id == current_user.id:
+                elif pending_couple.requested_id == current_user.telegram_id:
                     couple = Couple(
                         user1_id=pending_couple.requester_id,
                         user2_id=pending_couple.requested_id
@@ -136,7 +136,7 @@ async def add_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Update the user's language if it has changed
         update_user_language(session, user, user_language)
 
-        existing_couple = check_user_linked(session, user.id)
+        existing_couple = check_user_linked(session, user.telegram_id)
 
         if existing_couple:
             await send_message_to_user(context.bot, update.effective_user.id, "You are already linked with a partner. Remove that link first with /remove_partner", llm, user_language)
@@ -145,7 +145,7 @@ async def add_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         token = secrets.token_urlsafe(16)
         pending_couple = PendingCouple(
-            requester_id=user.id,
+            requester_id=user.telegram_id,
             requested_id=None,
             token=token
         )
@@ -153,7 +153,7 @@ async def add_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         invite_link = f"https://t.me/{context.bot.username}?start={token}"
         await send_message_to_user(context.bot, update.effective_user.id, f"Here is your invite link: {invite_link}\nShare this with your partner to link your chats.", llm, user_language)
-        logger.info("Invite link generated", user_id=user.id, invite_link=invite_link)
+        logger.info("Invite link generated", user_id=user.telegram_id, invite_link=invite_link)
 
 async def remove_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with get_session() as session:
@@ -166,7 +166,7 @@ async def remove_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Update the user's language if it has changed
         update_user_language(session, user, user_language)
 
-        couple = check_user_linked(session, user.id)
+        couple = check_user_linked(session, user.telegram_id)
 
         if not couple:
             await send_message_to_user(context.bot, update.effective_user.id, "You are not linked with any partner.", llm, user_language)
@@ -183,12 +183,12 @@ async def confirm_unlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             if update.message.text.lower() == 'yes':
-                couple = check_user_linked(session, user.id)
+                couple = check_user_linked(session, user.telegram_id)
 
                 if couple:
                     session.delete(couple)
                     await send_message_to_user(context.bot, update.effective_user.id, "You have been unlinked from your partner.", llm, user_language)
-                    logger.info("Partner unlinked successfully", user_id=user.id, partner_id=(couple.user1_id if couple.user2_id == user.id else couple.user2_id))
+                    logger.info("Partner unlinked successfully", user_id=user.telegram_id, partner_id=(couple.user1_id if couple.user2_id == user.telegram_id else couple.user2_id))
                 else:
                     await send_message_to_user(context.bot, update.effective_user.id, "You are no longer linked with a partner.", llm, user_language)
                     logger.warning("Unlink attempt failed, no active link found", telegram_id=update.effective_user.id)
@@ -212,7 +212,7 @@ async def delete_all_my_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Update the user's language if it has changed
         update_user_language(session, user, user_language)
 
-        couple = check_user_linked(session, user.id)
+        couple = check_user_linked(session, user.telegram_id)
 
         if not couple:
             await send_message_to_user(context.bot, update.effective_user.id, "You are not linked with any partner. Your data will be deleted.", llm, user_language)
@@ -230,10 +230,10 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             if update.message.text.lower() == 'yes':
-                couple = check_user_linked(session, user.id)
+                couple = check_user_linked(session, user.telegram_id)
 
                 if couple:
-                    partner_id = couple.user1_id if couple.user2_id == user.id else couple.user2_id
+                    partner_id = couple.user1_id if couple.user2_id == user.telegram_id else couple.user2_id
                     partner = get_current_user(session, partner_id)
 
                     session.query(Conversation).filter(Conversation.couple_id == couple.id).delete()
@@ -245,7 +245,7 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         session.delete(partner)
 
                     await send_message_to_user(context.bot, update.effective_user.id, "All your data and your partner's data have been deleted.", llm, user_language)
-                    logger.info("User and partner data deleted successfully", user_id=user.id, partner_id=partner_id)
+                    logger.info("User and partner data deleted successfully", user_id=user.telegram_id, partner_id=partner_id)
                 else:
                     await send_message_to_user(context.bot, update.effective_user.id, "You are no longer linked with a partner.", llm, user_language)
                     logger.warning("Delete data attempt failed, no active link found", telegram_id=update.effective_user.id)
@@ -310,7 +310,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response_content = response.content
         await update.message.reply_text(response_content)
 
-        await save_conversation(session, user.id, message)
+        await save_conversation(session, user.telegram_id, message)
 
         logger.info("User message handled successfully", telegram_id=user_telegram_id)
 

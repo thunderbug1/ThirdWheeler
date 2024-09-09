@@ -7,8 +7,7 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = 'users'
     
-    id = Column(BigInteger, primary_key=True)
-    telegram_id = Column(BigInteger, unique=True, nullable=False)
+    telegram_id = Column(BigInteger, primary_key=True, unique=True, nullable=False)
     name = Column(String, nullable=False)
     summary = Column(Text, nullable=True)
     language = Column(String, nullable=True)
@@ -20,8 +19,8 @@ class Couple(Base):
     __tablename__ = 'couples'
     
     id = Column(BigInteger, primary_key=True)
-    user1_id = Column(BigInteger, ForeignKey('users.id'))
-    user2_id = Column(BigInteger, ForeignKey('users.id'))
+    user1_id = Column(BigInteger, ForeignKey('users.telegram_id'))
+    user2_id = Column(BigInteger, ForeignKey('users.telegram_id'))
     
     user1 = relationship('User', foreign_keys=[user1_id])
     user2 = relationship('User', foreign_keys=[user2_id])
@@ -32,7 +31,7 @@ class Conversation(Base):
     
     id = Column(BigInteger, primary_key=True)
     couple_id = Column(BigInteger, ForeignKey('couples.id'))
-    user_id = Column(BigInteger, ForeignKey('users.id'))
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id'))
     message = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
@@ -43,7 +42,7 @@ class ScheduledAction(Base):
     __tablename__ = 'scheduled_actions'
     
     id = Column(Integer, primary_key=True)
-    user_id = Column(BigInteger, ForeignKey('users.id'))
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id'))
     description = Column(Text, nullable=False)  # Description of what will be done for the LLM
     trigger_time = Column(DateTime, nullable=False)  # When the action should be triggered
     is_active = Column(Boolean, default=True)  # Mark if the action is active
@@ -54,7 +53,7 @@ class UserActionLog(Base):
     __tablename__ = 'user_action_logs'
     
     id = Column(BigInteger, primary_key=True)
-    user_id = Column(BigInteger, ForeignKey('users.id'))
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id'))
     action = Column(String, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
@@ -62,8 +61,8 @@ class PendingCouple(Base):
     __tablename__ = 'pending_couples'
 
     id = Column(BigInteger, primary_key=True)
-    requester_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
-    requested_id = Column(BigInteger, ForeignKey('users.id'), nullable=True)  # Make nullable
+    requester_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
+    requested_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=True)  # Make nullable
     token = Column(String, unique=True, nullable=False)
 
     requester = relationship('User', foreign_keys=[requester_id])

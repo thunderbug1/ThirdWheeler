@@ -34,7 +34,7 @@ async def rate_limited(update: ContextTypes.DEFAULT_TYPE, context: ContextTypes.
         await update.message.reply_text(translated_message)
         return True
 
-    last_action_time = session.query(UserActionLog.timestamp).filter(UserActionLog.user_id == user.id).order_by(UserActionLog.timestamp.desc()).first()
+    last_action_time = session.query(UserActionLog.timestamp).filter(UserActionLog.user_id == user.telegram_id).order_by(UserActionLog.timestamp.desc()).first()
 
     if last_action_time:
         # Convert last_action_time to an offset-aware datetime if it's offset-naive
@@ -43,10 +43,10 @@ async def rate_limited(update: ContextTypes.DEFAULT_TYPE, context: ContextTypes.
         if (current_time - last_action_time_aware).total_seconds() < 3:
             translated_message = get_translated_message(llm, "You're doing that too much. Please slow down.", user_language)
             await update.message.reply_text(translated_message)
-            logger.info("Rate limit enforced", user_id=user.id, telegram_id=user_telegram_id)
+            logger.info("Rate limit enforced", telegram_id=user_telegram_id)
             return True
     
-    log_entry = UserActionLog(user_id=user.id, action=update.message.text, timestamp=current_time)
+    log_entry = UserActionLog(user_id=user.telegram_id, action=update.message.text, timestamp=current_time)
     session.add(log_entry)
     session.commit()
     

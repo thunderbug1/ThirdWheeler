@@ -65,7 +65,7 @@ async def trigger_action(session: Session, bot: Bot, llm: LLMWrapper, action: Sc
     if user:
         # Retrieve the last few messages between the bot and the user
         recent_conversations = session.query(Conversation).filter(
-            Conversation.user_id == user.id
+            Conversation.user_id == user.telegram_id
         ).order_by(Conversation.timestamp.desc()).limit(5).all()
 
         # Prepare the conversation history for the LLM context
@@ -73,7 +73,7 @@ async def trigger_action(session: Session, bot: Bot, llm: LLMWrapper, action: Sc
         for conversation in reversed(recent_conversations):  # Reverse to maintain chronological order
             time_since = format_time_since(conversation.timestamp)
             recent_messages.append({
-                "role": "user" if conversation.user_id == user.id else "assistant",
+                "role": "user" if conversation.user_id == user.telegram_id else "assistant",
                 "content": f"{conversation.message} (sent {time_since})"
             })
 
