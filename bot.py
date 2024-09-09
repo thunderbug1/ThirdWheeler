@@ -320,7 +320,7 @@ def main():
     init_db()
 
     # Start the scheduler in a separate thread
-    scheduler_thread = threading.Thread(target=start_scheduler, args=(settings.BOT_TOKEN), daemon=True)
+    scheduler_thread = threading.Thread(target=start_scheduler, args=(settings.BOT_TOKEN,), daemon=True)
     scheduler_thread.start()
 
     application = ApplicationBuilder().token(settings.BOT_TOKEN).build()
